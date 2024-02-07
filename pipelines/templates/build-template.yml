@@ -1,0 +1,64 @@
+# Build Template
+# Reusable build steps for .NET, Node.js, or Python projects.
+# Reference: https://learn.microsoft.com/en-us/azure/devops/pipelines/process/templates
+
+parameters:
+  - name: buildConfiguration
+    type: string
+    default: 'Release'
+    values:
+      - Debug
+      - Release
+
+  - name: projectPath
+    type: string
+    default: '**/*.csproj'
+
+  - name: artifactName
+    type: string
+    default: 'drop'
+
+  - name: dotnetVersion
+    type: string
+    default: '8.x'
+
+  - name: publishEnabled
+    type: boolean
+    default: true
+
+steps:
+  - task: UseDotNet@2
+    displayName: 'Use .NET SDK ${{ parameters.dotnetVersion }}'
+    inputs:
+      version: ${{ parameters.dotnetVersion }}
+      includePreviewVersions: false
+
+  - task: DotNetCoreCLI@2
+    displayName: 'Restore NuGet packages'
+    inputs:
+      command: restore
+      projects: ${{ parameters.projectPath }}
+      feedsToUse: select
+
+  - task: DotNetCoreCLI@2
+    displayName: 'Build (${{ parameters.buildConfiguration }})'
+    inputs:
+      command: build
+      projects: ${{ parameters.projectPath }}
+      arguments: '--configuration ${{ parameters.buildConfiguration }} --no-restore'
+
+  - ${{ if eq(parameters.publishEnabled, true) }}:
+    - task: DotNetCoreCLI@2
+      displayName: 'Publish artifacts'
+      inputs:
+        command: publish
+        publishWebProjects: true
+        arguments: '--configuration ${{ parameters.buildConfiguration }} --output $(Build.ArtifactStagingDirectory)'
+        zipAfterPublish: true
+
+    - task: PublishBuildArtifacts@1
+      displayName: 'Upload artifact: ${{ parameters.artifactName }}'
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+        ArtifactName: ${{ parameters.artifactName }}
+        publishLocation: Container

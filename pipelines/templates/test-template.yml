@@ -1,0 +1,72 @@
+# Test Template
+# Runs unit and integration tests, publishes results and code coverage.
+
+parameters:
+  - name: projectPath
+    type: string
+    default: '**/*Tests/*.csproj'
+
+  - name: buildConfiguration
+    type: string
+    default: 'Release'
+
+  - name: collectCoverage
+    type: boolean
+    default: true
+
+  - name: coverageThreshold
+    type: number
+    default: 80
+
+  - name: runIntegrationTests
+    type: boolean
+    default: false
+
+steps:
+  - task: DotNetCoreCLI@2
+    displayName: 'Run unit tests'
+    inputs:
+      command: test
+      projects: ${{ parameters.projectPath }}
+      arguments: >
+        --configuration ${{ parameters.buildConfiguration }}
+        --no-build
+        --logger trx
+        --results-directory $(Agent.TempDirectory)/TestResults
+        ${{ if eq(parameters.collectCoverage, true) }}:
+          /p:CollectCoverage=true
+          /p:CoverletOutputFormat=cobertura
+          /p:CoverletOutput=$(Agent.TempDirectory)/coverage/
+          /p:Threshold=${{ parameters.coverageThreshold }}
+      publishTestResults: false
+
+  - ${{ if eq(parameters.runIntegrationTests, true) }}:
+    - task: DotNetCoreCLI@2
+      displayName: 'Run integration tests'
+      inputs:
+        command: test
+        projects: '**/*IntegrationTests/*.csproj'
+        arguments: >
+          --configuration ${{ parameters.buildConfiguration }}
+          --no-build
+          --logger trx
+          --results-directory $(Agent.TempDirectory)/TestResults/Integration
+        publishTestResults: false
+
+  - task: PublishTestResults@2
+    displayName: 'Publish test results'
+    condition: always()
+    inputs:
+      testResultsFormat: VSTest
+      testResultsFiles: '$(Agent.TempDirectory)/TestResults/**/*.trx'
+      mergeTestResults: true
+      failTaskOnFailedTests: true
+
+  - ${{ if eq(parameters.collectCoverage, true) }}:
+    - task: PublishCodeCoverageResults@2
+      displayName: 'Publish code coverage'
+      condition: always()
+      inputs:
+        codeCoverageTool: Cobertura
+        summaryFileLocation: '$(Agent.TempDirectory)/coverage/coverage.cobertura.xml'
+        failIfCoverageEmpty: true

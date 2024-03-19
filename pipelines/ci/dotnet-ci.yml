@@ -1,0 +1,90 @@
+# .NET CI Pipeline
+# Builds, tests, and publishes a .NET application on every push to main/develop
+# and on all pull requests targeting those branches.
+#
+# Required variable group: "dotnet-ci-vars"
+#   - SONAR_TOKEN       (optional) SonarCloud token for code analysis
+
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+  paths:
+    exclude:
+      - docs/**
+      - '**/*.md'
+
+pr:
+  branches:
+    include:
+      - main
+      - develop
+
+variables:
+  - group: dotnet-ci-vars
+  - name: buildConfiguration
+    value: Release
+  - name: dotnetVersion
+    value: '8.x'
+  - name: vmImage
+    value: 'ubuntu-latest'
+
+pool:
+  vmImage: $(vmImage)
+
+stages:
+  - stage: Build
+    displayName: 'Build & Test'
+    jobs:
+      - job: BuildAndTest
+        displayName: 'Build, Test & Analyze'
+        steps:
+          - checkout: self
+            fetchDepth: 0  # Required for SonarCloud blame information
+
+          - template: ../templates/build-template.yml
+            parameters:
+              buildConfiguration: $(buildConfiguration)
+              dotnetVersion: $(dotnetVersion)
+              publishEnabled: true
+              artifactName: drop
+
+          - template: ../templates/test-template.yml
+            parameters:
+              buildConfiguration: $(buildConfiguration)
+              collectCoverage: true
+              coverageThreshold: 80
+              runIntegrationTests: false
+
+          - task: SonarCloudAnalyze@2
+            displayName: 'SonarCloud: Run analysis'
+            condition: and(succeeded(), ne(variables['SONAR_TOKEN'], ''))
+
+          - task: SonarCloudPublish@2
+            displayName: 'SonarCloud: Publish results'
+            condition: and(succeeded(), ne(variables['SONAR_TOKEN'], ''))
+            inputs:
+              pollingTimeoutSec: '300'
+
+  - stage: SecurityScan
+    displayName: 'Security Scan'
+    dependsOn: Build
+    condition: succeeded()
+    jobs:
+      - job: DependencyScan
+        displayName: 'Dependency vulnerability scan'
+        steps:
+          - task: UseDotNet@2
+            inputs:
+              version: $(dotnetVersion)
+
+          - script: dotnet list package --vulnerable --include-transitive 2>&1 | tee $(Agent.TempDirectory)/vuln-report.txt
+            displayName: 'Check for vulnerable NuGet packages'
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish vulnerability report'
+            condition: always()
+            inputs:
+              PathtoPublish: '$(Agent.TempDirectory)/vuln-report.txt'
+              ArtifactName: security-reports

@@ -1,0 +1,49 @@
+version: "3.8"
+
+services:
+  azure-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: azure-devops-agent:latest
+    environment:
+      AZP_URL: ${AZP_URL}
+      AZP_TOKEN: ${AZP_TOKEN}
+      AZP_POOL: ${AZP_POOL:-Default}
+      AZP_AGENT_NAME: ${AZP_AGENT_NAME:-docker-agent}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - agent-work:/azp/_work
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4G
+        reservations:
+          cpus: "0.5"
+          memory: 1G
+
+  azure-agent-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: azure-devops-agent:latest
+    environment:
+      AZP_URL: ${AZP_URL}
+      AZP_TOKEN: ${AZP_TOKEN}
+      AZP_POOL: ${AZP_POOL:-Default}
+      AZP_AGENT_NAME: ${AZP_AGENT_NAME:-docker-agent}-2
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - agent-work-2:/azp/_work
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4G
+
+volumes:
+  agent-work:
+  agent-work-2:

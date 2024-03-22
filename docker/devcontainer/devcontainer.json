@@ -1,0 +1,30 @@
+{
+  "name": "Azure DevOps Utilities Dev",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/powershell:1": {},
+    "ghcr.io/devcontainers/features/node:1": { "version": "20" },
+    "ghcr.io/devcontainers/features/python:1": { "version": "3.12" },
+    "ghcr.io/devcontainers/features/dotnet:2": { "version": "8.0" },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers/features/kubectl-helm-minikube:1": {}
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-azure-devops.azure-pipelines",
+        "ms-azuretools.vscode-azureresourcegroups",
+        "ms-azuretools.vscode-bicep",
+        "hashicorp.terraform",
+        "ms-python.python",
+        "ms-dotnettools.csharp",
+        "timonwong.shellcheck",
+        "redhat.vscode-yaml"
+      ]
+    }
+  },
+  "postCreateCommand": "pip install -r tools/requirements.txt",
+  "remoteUser": "vscode"
+}

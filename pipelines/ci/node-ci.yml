@@ -1,0 +1,107 @@
+# Node.js CI Pipeline
+# Installs dependencies, lints, builds, and tests a Node.js application.
+
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+  paths:
+    exclude:
+      - docs/**
+      - '**/*.md'
+
+pr:
+  branches:
+    include:
+      - main
+      - develop
+
+variables:
+  - name: nodeVersion
+    value: '20.x'
+  - name: vmImage
+    value: 'ubuntu-latest'
+  - name: npm_config_cache
+    value: $(Pipeline.Workspace)/.npm
+
+pool:
+  vmImage: $(vmImage)
+
+stages:
+  - stage: Build
+    displayName: 'Build & Test'
+    jobs:
+      - job: BuildAndTest
+        displayName: 'Install, Lint, Build & Test'
+        steps:
+          - checkout: self
+
+          - task: NodeTool@0
+            displayName: 'Use Node.js $(nodeVersion)'
+            inputs:
+              versionSpec: $(nodeVersion)
+
+          - task: Cache@2
+            displayName: 'Cache npm packages'
+            inputs:
+              key: 'npm | "$(Agent.OS)" | package-lock.json'
+              restoreKeys: |
+                npm | "$(Agent.OS)"
+              path: $(npm_config_cache)
+
+          - script: npm ci
+            displayName: 'Install dependencies (npm ci)'
+
+          - script: npm run lint
+            displayName: 'Lint source code'
+            continueOnError: false
+
+          - script: npm run build --if-present
+            displayName: 'Build application'
+
+          - script: npm test -- --ci --coverage --reporters=jest-junit
+            displayName: 'Run tests with coverage'
+            env:
+              CI: true
+
+          - task: PublishTestResults@2
+            displayName: 'Publish test results'
+            condition: always()
+            inputs:
+              testResultsFormat: JUnit
+              testResultsFiles: '**/junit.xml'
+              mergeTestResults: true
+              failTaskOnFailedTests: true
+
+          - task: PublishCodeCoverageResults@2
+            displayName: 'Publish code coverage'
+            condition: always()
+            inputs:
+              codeCoverageTool: Cobertura
+              summaryFileLocation: '**/coverage/cobertura-coverage.xml'
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish build artifacts'
+            condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+            inputs:
+              PathtoPublish: 'dist'
+              ArtifactName: node-drop
+
+  - stage: AuditDependencies
+    displayName: 'Dependency Audit'
+    dependsOn: Build
+    condition: succeeded()
+    jobs:
+      - job: NpmAudit
+        displayName: 'npm audit'
+        steps:
+          - task: NodeTool@0
+            inputs:
+              versionSpec: $(nodeVersion)
+
+          - script: npm ci
+            displayName: 'Install dependencies'
+
+          - script: npm audit --audit-level=high
+            displayName: 'Audit for high/critical vulnerabilities'

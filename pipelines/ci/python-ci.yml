@@ -1,0 +1,121 @@
+# Python CI Pipeline
+# Lints, tests, and packages a Python application using pip and pytest.
+
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+  paths:
+    exclude:
+      - docs/**
+      - '**/*.md'
+
+pr:
+  branches:
+    include:
+      - main
+      - develop
+
+variables:
+  - name: pythonVersion
+    value: '3.12'
+  - name: vmImage
+    value: 'ubuntu-latest'
+  - name: PIP_CACHE_DIR
+    value: $(Pipeline.Workspace)/.pip
+
+pool:
+  vmImage: $(vmImage)
+
+stages:
+  - stage: Lint
+    displayName: 'Lint & Format Check'
+    jobs:
+      - job: LintCheck
+        displayName: 'Ruff lint + Black format'
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: $(pythonVersion)
+              addToPath: true
+
+          - script: pip install ruff black
+            displayName: 'Install lint tools'
+
+          - script: ruff check .
+            displayName: 'Run ruff linter'
+
+          - script: black --check .
+            displayName: 'Check Black formatting'
+
+  - stage: Test
+    displayName: 'Test & Coverage'
+    dependsOn: Lint
+    condition: succeeded()
+    jobs:
+      - job: UnitTests
+        displayName: 'pytest with coverage'
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: $(pythonVersion)
+              addToPath: true
+
+          - task: Cache@2
+            displayName: 'Cache pip packages'
+            inputs:
+              key: 'pip | "$(Agent.OS)" | requirements.txt'
+              restoreKeys: |
+                pip | "$(Agent.OS)"
+              path: $(PIP_CACHE_DIR)
+
+          - script: pip install -r requirements.txt
+            displayName: 'Install dependencies'
+
+          - script: |
+              pip install pytest pytest-cov pytest-azurepipelines
+              pytest tests/ \
+                --junitxml=$(Agent.TempDirectory)/test-results.xml \
+                --cov=. \
+                --cov-report=xml:$(Agent.TempDirectory)/coverage.xml \
+                --cov-fail-under=75
+            displayName: 'Run pytest with coverage'
+
+          - task: PublishTestResults@2
+            displayName: 'Publish test results'
+            condition: always()
+            inputs:
+              testResultsFormat: JUnit
+              testResultsFiles: '$(Agent.TempDirectory)/test-results.xml'
+              failTaskOnFailedTests: true
+
+          - task: PublishCodeCoverageResults@2
+            displayName: 'Publish code coverage'
+            condition: always()
+            inputs:
+              codeCoverageTool: Cobertura
+              summaryFileLocation: '$(Agent.TempDirectory)/coverage.xml'
+
+  - stage: Package
+    displayName: 'Package'
+    dependsOn: Test
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - job: BuildWheel
+        displayName: 'Build Python wheel'
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: $(pythonVersion)
+
+          - script: pip install build
+            displayName: 'Install build tools'
+
+          - script: python -m build
+            displayName: 'Build wheel and sdist'
+
+          - task: PublishBuildArtifacts@1
+            inputs:
+              PathtoPublish: 'dist/'
+              ArtifactName: python-packages

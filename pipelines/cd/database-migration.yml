@@ -1,0 +1,198 @@
+trigger: none
+
+parameters:
+  - name: environment
+    type: string
+    values: ["dev", "staging", "production"]
+  - name: migrationDirection
+    type: string
+    default: "up"
+    values: ["up", "down"]
+  - name: targetVersion
+    type: string
+    default: "latest"
+  - name: dryRun
+    type: boolean
+    default: true
+
+variables:
+  - group: "database-${{ parameters.environment }}"
+  - name: migrationTool
+    value: "flyway"
+
+stages:
+  - stage: Validate
+    displayName: "Validate Migrations"
+    jobs:
+      - job: ValidateMigrations
+        displayName: "Validate SQL migrations"
+        pool:
+          vmImage: "ubuntu-latest"
+        steps:
+          - checkout: self
+            fetchDepth: 0
+
+          - task: UseDotNet@2
+            inputs:
+              packageType: "sdk"
+              version: "8.x"
+
+          - script: |
+              echo "Validating migration files..."
+              MIGRATION_DIR="$(Build.SourcesDirectory)/database/migrations"
+              
+              if [ ! -d "$MIGRATION_DIR" ]; then
+                echo "##vso[task.logissue type=error]Migration directory not found"
+                exit 1
+              fi
+              
+              # Check naming convention: V{version}__{description}.sql
+              for f in "$MIGRATION_DIR"/V*.sql; do
+                if [ -f "$f" ]; then
+                  basename=$(basename "$f")
+                  if ! echo "$basename" | grep -qE '^V[0-9]+(\.[0-9]+)*__[a-zA-Z0-9_]+\.sql$'; then
+                    echo "##vso[task.logissue type=error]Invalid migration name: $basename"
+                    echo "Expected format: V{version}__{description}.sql"
+                    exit 1
+                  fi
+                fi
+              done
+              
+              echo "All migration files follow naming convention"
+            displayName: "Validate naming conventions"
+
+          - script: |
+              # Run sqlfluff lint on migration files
+              pip install sqlfluff
+              sqlfluff lint database/migrations/ \
+                --dialect tsql \
+                --format github-annotation || true
+            displayName: "Lint SQL migrations"
+
+  - stage: Backup
+    displayName: "Backup Database"
+    dependsOn: Validate
+    condition: |
+      and(
+        succeeded(),
+        ne('${{ parameters.dryRun }}', true),
+        eq('${{ parameters.environment }}', 'production')
+      )
+    jobs:
+      - deployment: BackupDatabase
+        displayName: "Create backup"
+        environment: "${{ parameters.environment }}-db"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureCLI@2
+                  displayName: "Create database backup"
+                  inputs:
+                    azureSubscription: "$(serviceConnection)"
+                    scriptType: "bash"
+                    scriptLocation: "inlineScript"
+                    inlineScript: |
+                      TIMESTAMP=$(date +%Y%m%d%H%M%S)
+                      BACKUP_NAME="pre-migration-${TIMESTAMP}"
+                      
+                      az sql db export \
+                        --admin-user "$(dbAdminUser)" \
+                        --admin-password "$(dbAdminPassword)" \
+                        --auth-type SQL \
+                        --name "$(databaseName)" \
+                        --resource-group "$(resourceGroup)" \
+                        --server "$(sqlServerName)" \
+                        --storage-key "$(storageKey)" \
+                        --storage-key-type StorageAccessKey \
+                        --storage-uri "https://$(storageAccount).blob.core.windows.net/db-backups/${BACKUP_NAME}.bacpac"
+                      
+                      echo "##vso[task.setvariable variable=backupName;isOutput=true]${BACKUP_NAME}"
+
+  - stage: Migrate
+    displayName: "Run Migrations (${{ parameters.environment }})"
+    dependsOn:
+      - Validate
+      - ${{ if eq(parameters.environment, 'production') }}:
+        - Backup
+    jobs:
+      - deployment: RunMigration
+        displayName: "Execute migrations"
+        environment: "${{ parameters.environment }}-db"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - script: |
+                    echo "Downloading Flyway..."
+                    wget -qO- https://download.red-gate.com/maven/release/com/redgate/flyway/flyway-commandline/10.6.0/flyway-commandline-10.6.0-linux-x64.tar.gz | tar xz
+                    export PATH="$PWD/flyway-10.6.0:$PATH"
+                    echo "##vso[task.prependpath]$PWD/flyway-10.6.0"
+                  displayName: "Install Flyway"
+
+                - script: |
+                    TARGET_ARG=""
+                    if [ "${{ parameters.targetVersion }}" != "latest" ]; then
+                      TARGET_ARG="-target=${{ parameters.targetVersion }}"
+                    fi
+                    
+                    DRY_RUN_ARG=""
+                    if [ "${{ parameters.dryRun }}" = "true" ]; then
+                      DRY_RUN_ARG="-dryRunOutput=migration-preview.sql"
+                      echo "DRY RUN MODE - No changes will be applied"
+                    fi
+                    
+                    flyway \
+                      -url="jdbc:sqlserver://$(sqlServerFQDN):1433;database=$(databaseName);encrypt=true;trustServerCertificate=false" \
+                      -user="$(dbAdminUser)" \
+                      -password="$(dbAdminPassword)" \
+                      -locations="filesystem:$(Build.SourcesDirectory)/database/migrations" \
+                      -baselineOnMigrate=true \
+                      $TARGET_ARG \
+                      $DRY_RUN_ARG \
+                      info
+                    
+                    if [ "${{ parameters.dryRun }}" != "true" ]; then
+                      flyway \
+                        -url="jdbc:sqlserver://$(sqlServerFQDN):1433;database=$(databaseName);encrypt=true;trustServerCertificate=false" \
+                        -user="$(dbAdminUser)" \
+                        -password="$(dbAdminPassword)" \
+                        -locations="filesystem:$(Build.SourcesDirectory)/database/migrations" \
+                        -baselineOnMigrate=true \
+                        $TARGET_ARG \
+                        ${{ parameters.migrationDirection }}
+                    fi
+                  displayName: "Run Flyway ${{ parameters.migrationDirection }}"
+
+                - task: PublishBuildArtifacts@1
+                  condition: eq('${{ parameters.dryRun }}', true)
+                  inputs:
+                    pathToPublish: "migration-preview.sql"
+                    artifactName: "migration-preview"
+                  displayName: "Publish dry run preview"
+
+  - stage: Verify
+    displayName: "Verify Migration"
+    dependsOn: Migrate
+    condition: and(succeeded(), ne('${{ parameters.dryRun }}', true))
+    jobs:
+      - job: HealthCheck
+        displayName: "Post-migration health check"
+        pool:
+          vmImage: "ubuntu-latest"
+        steps:
+          - task: AzureCLI@2
+            displayName: "Verify database connectivity"
+            inputs:
+              azureSubscription: "$(serviceConnection)"
+              scriptType: "bash"
+              scriptLocation: "inlineScript"
+              inlineScript: |
+                az sql db show \
+                  --name "$(databaseName)" \
+                  --resource-group "$(resourceGroup)" \
+                  --server "$(sqlServerName)" \
+                  --query "{status: status, maxSizeBytes: maxSizeBytes}" \
+                  -o table

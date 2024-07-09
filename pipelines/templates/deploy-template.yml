@@ -1,0 +1,90 @@
+# Deploy Template
+# Deploys a build artifact to Azure App Service or Azure Kubernetes Service.
+
+parameters:
+  - name: environment
+    type: string
+    values:
+      - dev
+      - staging
+      - production
+
+  - name: serviceConnection
+    type: string
+
+  - name: artifactName
+    type: string
+    default: 'drop'
+
+  - name: deploymentTarget
+    type: string
+    default: 'appservice'
+    values:
+      - appservice
+      - kubernetes
+
+  # App Service parameters
+  - name: appServiceName
+    type: string
+    default: ''
+
+  - name: resourceGroupName
+    type: string
+    default: ''
+
+  # Kubernetes parameters
+  - name: kubernetesNamespace
+    type: string
+    default: 'default'
+
+  - name: manifestsPath
+    type: string
+    default: 'k8s/'
+
+  - name: containerRegistry
+    type: string
+    default: ''
+
+  - name: imageRepository
+    type: string
+    default: ''
+
+  - name: imageTag
+    type: string
+    default: '$(Build.BuildId)'
+
+steps:
+  - download: current
+    artifact: ${{ parameters.artifactName }}
+    displayName: 'Download artifact: ${{ parameters.artifactName }}'
+
+  - ${{ if eq(parameters.deploymentTarget, 'appservice') }}:
+    - task: AzureWebApp@1
+      displayName: 'Deploy to App Service (${{ parameters.environment }})'
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnection }}
+        appType: webApp
+        appName: ${{ parameters.appServiceName }}
+        resourceGroupName: ${{ parameters.resourceGroupName }}
+        package: '$(Pipeline.Workspace)/${{ parameters.artifactName }}/**/*.zip'
+        deploymentMethod: auto
+
+    - task: AzureAppServiceManage@0
+      displayName: 'Restart App Service'
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnection }}
+        Action: Restart Azure App Service
+        WebAppName: ${{ parameters.appServiceName }}
+        ResourceGroupName: ${{ parameters.resourceGroupName }}
+
+  - ${{ if eq(parameters.deploymentTarget, 'kubernetes') }}:
+    - task: KubernetesManifest@1
+      displayName: 'Deploy to AKS (${{ parameters.environment }})'
+      inputs:
+        action: deploy
+        connectionType: azureResourceManager
+        azureSubscriptionConnection: ${{ parameters.serviceConnection }}
+        namespace: ${{ parameters.kubernetesNamespace }}
+        manifests: '${{ parameters.manifestsPath }}/*.yml'
+        containers: '${{ parameters.containerRegistry }}/${{ parameters.imageRepository }}:${{ parameters.imageTag }}'
+        imagePullSecrets: acr-auth

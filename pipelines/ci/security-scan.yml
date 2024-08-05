@@ -1,0 +1,162 @@
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+      - release/*
+  paths:
+    exclude:
+      - docs/**
+      - "*.md"
+
+schedules:
+  - cron: "0 2 * * 1"
+    displayName: "Weekly full scan"
+    branches:
+      include:
+        - main
+    always: true
+
+pool:
+  vmImage: "ubuntu-latest"
+
+variables:
+  - name: trivySeverity
+    value: "HIGH,CRITICAL"
+  - name: failOnHighSeverity
+    value: true
+
+stages:
+  - stage: SAST
+    displayName: "Static Application Security Testing"
+    jobs:
+      - job: SemgrepScan
+        displayName: "Semgrep SAST Scan"
+        steps:
+          - script: |
+              pip install semgrep
+              semgrep ci \
+                --config "p/owasp-top-ten" \
+                --config "p/cwe-top-25" \
+                --config "p/security-audit" \
+                --sarif --output semgrep-results.sarif \
+                --json --json-output semgrep-results.json \
+                || true
+            displayName: "Run Semgrep"
+            env:
+              SEMGREP_APP_TOKEN: $(SEMGREP_TOKEN)
+
+          - task: PublishBuildArtifacts@1
+            inputs:
+              pathToPublish: "semgrep-results.sarif"
+              artifactName: "sast-results"
+            condition: always()
+
+      - job: BanditScan
+        displayName: "Python Security Scan (Bandit)"
+        steps:
+          - script: |
+              pip install bandit[toml]
+              bandit -r tools/ -f json -o bandit-results.json --severity-level medium || true
+              bandit -r tools/ -f screen --severity-level medium || true
+            displayName: "Run Bandit"
+
+          - task: PublishBuildArtifacts@1
+            inputs:
+              pathToPublish: "bandit-results.json"
+              artifactName: "bandit-results"
+            condition: always()
+
+  - stage: SecretScanning
+    displayName: "Secret Detection"
+    dependsOn: []
+    jobs:
+      - job: GitLeaks
+        displayName: "Detect hardcoded secrets"
+        steps:
+          - script: |
+              wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.18.2/gitleaks_8.18.2_linux_x64.tar.gz
+              tar -xzf gitleaks_8.18.2_linux_x64.tar.gz
+              chmod +x gitleaks
+            displayName: "Install Gitleaks"
+
+          - script: |
+              ./gitleaks detect \
+                --source . \
+                --report-path gitleaks-report.json \
+                --report-format json \
+                --verbose \
+                || EXIT_CODE=$?
+              
+              if [ "${EXIT_CODE:-0}" -ne 0 ]; then
+                echo "##vso[task.logissue type=error]Secrets detected in repository!"
+                cat gitleaks-report.json | python3 -m json.tool
+                exit 1
+              fi
+              
+              echo "No secrets detected"
+            displayName: "Scan for secrets"
+
+  - stage: DependencyAudit
+    displayName: "Dependency Vulnerability Scan"
+    dependsOn: []
+    jobs:
+      - job: TrivyFS
+        displayName: "Trivy filesystem scan"
+        steps:
+          - script: |
+              curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v0.49.1
+            displayName: "Install Trivy"
+
+          - script: |
+              trivy fs . \
+                --severity $(trivySeverity) \
+                --format sarif \
+                --output trivy-results.sarif \
+                || true
+              
+              trivy fs . \
+                --severity $(trivySeverity) \
+                --format table \
+                --exit-code $([[ "$(failOnHighSeverity)" == "true" ]] && echo 1 || echo 0)
+            displayName: "Scan dependencies"
+
+          - task: PublishBuildArtifacts@1
+            inputs:
+              pathToPublish: "trivy-results.sarif"
+              artifactName: "dependency-scan"
+            condition: always()
+
+  - stage: InfrastructureScan
+    displayName: "Infrastructure as Code Scan"
+    dependsOn: []
+    jobs:
+      - job: CheckovScan
+        displayName: "Checkov IaC scan"
+        steps:
+          - script: |
+              pip install checkov
+              checkov \
+                --directory infrastructure/ \
+                --framework terraform bicep arm \
+                --output cli sarif \
+                --output-file-path . \
+                --soft-fail \
+                --skip-check CKV_AZURE_35,CKV_AZURE_59
+            displayName: "Run Checkov"
+
+          - task: PublishBuildArtifacts@1
+            inputs:
+              pathToPublish: "results_sarif.sarif"
+              artifactName: "iac-scan"
+            condition: always()
+
+      - job: TFLint
+        displayName: "Terraform lint"
+        steps:
+          - script: |
+              curl -s https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh | bash
+              cd infrastructure/terraform
+              tflint --init
+              tflint --format compact
+            displayName: "Run TFLint"

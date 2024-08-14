@@ -1,0 +1,137 @@
+# Azure App Service CD Pipeline
+# Deploys to dev → staging → production with manual approval gates.
+#
+# Required variable groups:
+#   "deploy-dev-vars"        - DEV_APP_SERVICE_NAME, DEV_RESOURCE_GROUP, AZURE_SERVICE_CONNECTION
+#   "deploy-staging-vars"    - STAGING_APP_SERVICE_NAME, STAGING_RESOURCE_GROUP
+#   "deploy-production-vars" - PROD_APP_SERVICE_NAME, PROD_RESOURCE_GROUP
+
+trigger: none  # Triggered by CI pipeline artifact or manually
+
+resources:
+  pipelines:
+    - pipeline: ci-pipeline
+      source: 'CI - Build & Test'   # Name of your CI pipeline in Azure DevOps
+      trigger:
+        branches:
+          include:
+            - main
+
+variables:
+  - name: artifactName
+    value: drop
+  - name: vmImage
+    value: 'ubuntu-latest'
+
+stages:
+  # ─────────────────────────── DEV ───────────────────────────
+  - stage: DeployDev
+    displayName: 'Deploy to Dev'
+    variables:
+      - group: deploy-dev-vars
+    jobs:
+      - deployment: DeployAppServiceDev
+        displayName: 'Deploy to Dev App Service'
+        pool:
+          vmImage: $(vmImage)
+        environment: dev
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - template: ../templates/deploy-template.yml
+                  parameters:
+                    environment: dev
+                    serviceConnection: $(AZURE_SERVICE_CONNECTION)
+                    artifactName: $(artifactName)
+                    deploymentTarget: appservice
+                    appServiceName: $(DEV_APP_SERVICE_NAME)
+                    resourceGroupName: $(DEV_RESOURCE_GROUP)
+
+  # ─────────────────────────── STAGING ───────────────────────
+  - stage: DeployStaging
+    displayName: 'Deploy to Staging'
+    dependsOn: DeployDev
+    condition: succeeded()
+    variables:
+      - group: deploy-dev-vars
+      - group: deploy-staging-vars
+    jobs:
+      - deployment: DeployAppServiceStaging
+        displayName: 'Deploy to Staging App Service'
+        pool:
+          vmImage: $(vmImage)
+        environment: staging    # Requires approval check configured in Azure DevOps
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - template: ../templates/deploy-template.yml
+                  parameters:
+                    environment: staging
+                    serviceConnection: $(AZURE_SERVICE_CONNECTION)
+                    artifactName: $(artifactName)
+                    deploymentTarget: appservice
+                    appServiceName: $(STAGING_APP_SERVICE_NAME)
+                    resourceGroupName: $(STAGING_RESOURCE_GROUP)
+
+                - task: AzureAppServiceManage@0
+                  displayName: 'Warm up staging slot'
+                  inputs:
+                    azureSubscription: $(AZURE_SERVICE_CONNECTION)
+                    Action: Start Azure App Service
+                    WebAppName: $(STAGING_APP_SERVICE_NAME)
+                    ResourceGroupName: $(STAGING_RESOURCE_GROUP)
+
+  # ─────────────────────────── PRODUCTION ────────────────────
+  - stage: DeployProduction
+    displayName: 'Deploy to Production'
+    dependsOn: DeployStaging
+    condition: succeeded()
+    variables:
+      - group: deploy-dev-vars
+      - group: deploy-production-vars
+    jobs:
+      - deployment: DeployAppServiceProd
+        displayName: 'Deploy to Production App Service'
+        pool:
+          vmImage: $(vmImage)
+        environment: production   # Requires approval check + business hours gate
+        strategy:
+          runOnce:
+            preDeploy:
+              steps:
+                - script: echo "Starting production deployment at $(date)"
+                  displayName: 'Log deployment start'
+            deploy:
+              steps:
+                - template: ../templates/deploy-template.yml
+                  parameters:
+                    environment: production
+                    serviceConnection: $(AZURE_SERVICE_CONNECTION)
+                    artifactName: $(artifactName)
+                    deploymentTarget: appservice
+                    appServiceName: $(PROD_APP_SERVICE_NAME)
+                    resourceGroupName: $(PROD_RESOURCE_GROUP)
+            routeTraffic:
+              steps:
+                - script: echo "Traffic routed to new deployment"
+                  displayName: 'Traffic routing'
+            on:
+              success:
+                steps:
+                  - script: echo "Production deployment succeeded!"
+                    displayName: 'Deployment success notification'
+              failure:
+                steps:
+                  - script: echo "Production deployment FAILED — initiating rollback"
+                    displayName: 'Deployment failure — rollback'
+                  - task: AzureAppServiceManage@0
+                    displayName: 'Swap back to previous slot'
+                    inputs:
+                      azureSubscription: $(AZURE_SERVICE_CONNECTION)
+                      Action: Swap Slots
+                      WebAppName: $(PROD_APP_SERVICE_NAME)
+                      ResourceGroupName: $(PROD_RESOURCE_GROUP)
+                      SourceSlot: production
+                      SwapWithProduction: true

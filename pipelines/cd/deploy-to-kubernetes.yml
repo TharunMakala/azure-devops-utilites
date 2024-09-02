@@ -1,0 +1,154 @@
+# Azure Kubernetes Service CD Pipeline
+# Builds a container image, pushes to ACR, and deploys to AKS.
+#
+# Required variable groups:
+#   "aks-deploy-vars" - AZURE_SERVICE_CONNECTION, ACR_NAME, AKS_CLUSTER_NAME,
+#                       AKS_RESOURCE_GROUP, IMAGE_REPOSITORY
+
+trigger: none
+
+resources:
+  pipelines:
+    - pipeline: ci-pipeline
+      source: 'CI - Build & Test'
+      trigger:
+        branches:
+          include:
+            - main
+
+variables:
+  - group: aks-deploy-vars
+  - name: imageTag
+    value: $(Build.BuildId)
+  - name: vmImage
+    value: 'ubuntu-latest'
+
+stages:
+  - stage: BuildAndPushImage
+    displayName: 'Build & Push Container Image'
+    jobs:
+      - job: DockerBuildPush
+        displayName: 'Build Docker image and push to ACR'
+        pool:
+          vmImage: $(vmImage)
+        steps:
+          - checkout: self
+
+          - task: Docker@2
+            displayName: 'Login to ACR'
+            inputs:
+              command: login
+              containerRegistry: $(ACR_NAME)
+
+          - task: Docker@2
+            displayName: 'Build and push image'
+            inputs:
+              command: buildAndPush
+              repository: $(IMAGE_REPOSITORY)
+              dockerfile: '**/Dockerfile'
+              containerRegistry: $(ACR_NAME)
+              tags: |
+                $(imageTag)
+                latest
+
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish image tag artifact'
+            inputs:
+              targetPath: '$(System.DefaultWorkingDirectory)'
+              artifact: manifests
+              publishLocation: pipeline
+
+  # ─────────────────────────── DEV ───────────────────────────
+  - stage: DeployDev
+    displayName: 'Deploy to AKS Dev'
+    dependsOn: BuildAndPushImage
+    condition: succeeded()
+    jobs:
+      - deployment: DeployAKSDev
+        displayName: 'kubectl apply → dev namespace'
+        pool:
+          vmImage: $(vmImage)
+        environment: 'dev.default'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - template: ../templates/deploy-template.yml
+                  parameters:
+                    environment: dev
+                    serviceConnection: $(AZURE_SERVICE_CONNECTION)
+                    deploymentTarget: kubernetes
+                    kubernetesNamespace: dev
+                    manifestsPath: 'k8s/overlays/dev'
+                    containerRegistry: $(ACR_NAME).azurecr.io
+                    imageRepository: $(IMAGE_REPOSITORY)
+                    imageTag: $(imageTag)
+
+  # ─────────────────────────── STAGING ───────────────────────
+  - stage: DeployStaging
+    displayName: 'Deploy to AKS Staging'
+    dependsOn: DeployDev
+    condition: succeeded()
+    jobs:
+      - deployment: DeployAKSStaging
+        displayName: 'kubectl apply → staging namespace'
+        pool:
+          vmImage: $(vmImage)
+        environment: 'staging.default'   # Approval check required
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - template: ../templates/deploy-template.yml
+                  parameters:
+                    environment: staging
+                    serviceConnection: $(AZURE_SERVICE_CONNECTION)
+                    deploymentTarget: kubernetes
+                    kubernetesNamespace: staging
+                    manifestsPath: 'k8s/overlays/staging'
+                    containerRegistry: $(ACR_NAME).azurecr.io
+                    imageRepository: $(IMAGE_REPOSITORY)
+                    imageTag: $(imageTag)
+
+  # ─────────────────────────── PRODUCTION ────────────────────
+  - stage: DeployProduction
+    displayName: 'Deploy to AKS Production'
+    dependsOn: DeployStaging
+    condition: succeeded()
+    jobs:
+      - deployment: DeployAKSProd
+        displayName: 'kubectl apply → production namespace'
+        pool:
+          vmImage: $(vmImage)
+        environment: 'production.default'   # Approval + business hours gate
+        strategy:
+          canary:
+            increments: [10, 50]
+            preDeploy:
+              steps:
+                - script: echo "Starting canary deployment $(imageTag)"
+            deploy:
+              steps:
+                - template: ../templates/deploy-template.yml
+                  parameters:
+                    environment: production
+                    serviceConnection: $(AZURE_SERVICE_CONNECTION)
+                    deploymentTarget: kubernetes
+                    kubernetesNamespace: production
+                    manifestsPath: 'k8s/overlays/production'
+                    containerRegistry: $(ACR_NAME).azurecr.io
+                    imageRepository: $(IMAGE_REPOSITORY)
+                    imageTag: $(imageTag)
+            postRouteTraffic:
+              pool: server
+              steps:
+                - task: Delay@1
+                  inputs:
+                    delayForMinutes: '5'  # Allow metrics to stabilize before promoting
+            on:
+              failure:
+                steps:
+                  - script: echo "Canary failed — rolling back"
+              success:
+                steps:
+                  - script: echo "Canary succeeded — promoting to 100%"

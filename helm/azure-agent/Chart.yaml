@@ -1,0 +1,12 @@
+apiVersion: v2
+name: azure-devops-agent
+description: Helm chart for deploying Azure DevOps self-hosted agents on Kubernetes
+type: application
+version: 0.3.0
+appVersion: "3.232.1"
+keywords:
+  - azure-devops
+  - ci-cd
+  - build-agent
+maintainers:
+  - name: Platform Engineering

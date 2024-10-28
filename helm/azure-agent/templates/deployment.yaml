@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "azure-devops-agent.fullname" . }}
+  labels:
+    {{- include "azure-devops-agent.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "azure-devops-agent.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "azure-devops-agent.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "azure-devops-agent.serviceAccountName" . }}
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: AZP_URL
+              value: {{ .Values.azureDevOps.orgUrl | quote }}
+            - name: AZP_POOL
+              value: {{ .Values.azureDevOps.pool | quote }}
+            - name: AZP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.azureDevOps.existingSecret | default (printf "%s-pat" (include "azure-devops-agent.fullname" .)) }}
+                  key: pat
+            - name: AZP_AGENT_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            {{- if .Values.persistence.enabled }}
+            - name: work
+              mountPath: /azp/_work
+            {{- end }}
+            {{- if .Values.dockerInDocker.enabled }}
+            - name: docker-sock
+              mountPath: /var/run/docker.sock
+            {{- end }}
+          livenessProbe:
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - "pgrep -f Agent.Listener"
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          readinessProbe:
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - "pgrep -f Agent.Listener"
+            initialDelaySeconds: 30
+            periodSeconds: 10
+        {{- if .Values.dockerInDocker.enabled }}
+        - name: dind
+          image: docker:24-dind
+          securityContext:
+            privileged: true
+          resources:
+            {{- toYaml .Values.dockerInDocker.resources | nindent 12 }}
+          volumeMounts:
+            - name: docker-sock
+              mountPath: /var/run/docker.sock
+            - name: docker-storage
+              mountPath: /var/lib/docker
+        {{- end }}
+      volumes:
+        {{- if .Values.persistence.enabled }}
+        - name: work
+          persistentVolumeClaim:
+            claimName: {{ include "azure-devops-agent.fullname" . }}-work
+        {{- end }}
+        {{- if .Values.dockerInDocker.enabled }}
+        - name: docker-sock
+          emptyDir: {}
+        - name: docker-storage
+          emptyDir: {}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

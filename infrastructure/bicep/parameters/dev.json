@@ -1,0 +1,15 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environment":       { "value": "dev" },
+    "projectName":       { "value": "myproject" },
+    "location":          { "value": "eastus" },
+    "deployAgentPool":   { "value": true },
+    "agentVmSku":        { "value": "Standard_B2s" },
+    "agentMinCount":     { "value": 0 },
+    "agentMaxCount":     { "value": 5 },
+    "agentAdminUsername":{ "value": "azagent" },
+    "agentAdminPassword":{ "reference": { "keyVault": { "id": "/subscriptions/YOUR_SUB_ID/resourceGroups/rg-keyvault/providers/Microsoft.KeyVault/vaults/YOUR_KV_NAME" }, "secretName": "agent-admin-password" } }
+  }
+}

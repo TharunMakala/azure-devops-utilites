@@ -1,0 +1,99 @@
+{
+  "_comment": "Branch policy configuration template for main branch protection.",
+  "_usage": "Apply via ADO REST API: POST /{project}/_apis/policy/configurations?api-version=7.1",
+  "_docs": "https://learn.microsoft.com/en-us/rest/api/azure/devops/policy/",
+
+  "policies": [
+    {
+      "_name": "Minimum reviewer count",
+      "isEnabled": true,
+      "isBlocking": true,
+      "type": { "id": "fa4e907d-c16b-452d-8106-7efa0cb84489" },
+      "settings": {
+        "minimumApproverCount": 2,
+        "creatorVoteCounts": false,
+        "allowDownvotes": false,
+        "resetOnSourcePush": true,
+        "requireVoteOnLastIteration": false,
+        "resetRejectionsOnSourcePush": true,
+        "scope": [
+          {
+            "repositoryId": "REPLACE_WITH_REPO_ID",
+            "refName": "refs/heads/main",
+            "matchKind": "Exact"
+          }
+        ]
+      }
+    },
+    {
+      "_name": "Require linked work items",
+      "isEnabled": true,
+      "isBlocking": true,
+      "type": { "id": "40e92b44-2fe1-4dd6-b3d8-74a9c21d0c6e" },
+      "settings": {
+        "scope": [
+          {
+            "repositoryId": "REPLACE_WITH_REPO_ID",
+            "refName": "refs/heads/main",
+            "matchKind": "Exact"
+          }
+        ]
+      }
+    },
+    {
+      "_name": "Require comment resolution",
+      "isEnabled": true,
+      "isBlocking": true,
+      "type": { "id": "c6a1889d-b943-4856-b76f-9e46bb6b0df3" },
+      "settings": {
+        "scope": [
+          {
+            "repositoryId": "REPLACE_WITH_REPO_ID",
+            "refName": "refs/heads/main",
+            "matchKind": "Exact"
+          }
+        ]
+      }
+    },
+    {
+      "_name": "Merge strategy — squash only",
+      "isEnabled": true,
+      "isBlocking": true,
+      "type": { "id": "fa4e907d-c16b-452d-8106-7efa0cb84490" },
+      "settings": {
+        "allowSquash": true,
+        "allowNoFastForward": false,
+        "allowRebase": false,
+        "allowRebaseMerge": false,
+        "scope": [
+          {
+            "repositoryId": "REPLACE_WITH_REPO_ID",
+            "refName": "refs/heads/main",
+            "matchKind": "Exact"
+          }
+        ]
+      }
+    },
+    {
+      "_name": "Build validation — CI pipeline must pass",
+      "_note": "Replace buildDefinitionId with your CI pipeline ID",
+      "isEnabled": true,
+      "isBlocking": true,
+      "type": { "id": "0609b952-1397-4640-95ec-e00a01b2f659" },
+      "settings": {
+        "buildDefinitionId": 0,
+        "queueOnSourceUpdateOnly": true,
+        "manualQueueOnly": false,
+        "displayName": "CI — Build & Test",
+        "validDuration": 720,
+        "scope": [
+          {
+            "repositoryId": "REPLACE_WITH_REPO_ID",
+            "refName": "refs/heads/main",
+            "matchKind": "Exact"
+          }
+        ]
+      }
+    }
+  ]
+}

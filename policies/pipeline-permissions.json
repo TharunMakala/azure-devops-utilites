@@ -1,0 +1,58 @@
+{
+  "_comment": "Pipeline permission matrix — documents which groups have access to which resources.",
+  "_note": "Apply via Project Settings > Pipelines > Security in the Azure DevOps UI, or via REST API.",
+
+  "pipelineSecurityMatrix": {
+    "description": "Recommended RBAC for Azure Pipelines resources",
+    "groups": {
+      "ProjectAdministrators": {
+        "pipelines":       ["Administer", "Edit", "Delete", "View", "Queue", "Stop", "ManagePermissions"],
+        "variableGroups":  ["Administer", "View", "Use"],
+        "serviceConnections": ["Administer", "Use"],
+        "agentPools":      ["Administer", "View", "Use"]
+      },
+      "BuildAdministrators": {
+        "pipelines":       ["Edit", "View", "Queue", "Stop"],
+        "variableGroups":  ["View", "Use"],
+        "serviceConnections": ["Use"],
+        "agentPools":      ["View", "Use"]
+      },
+      "Contributors": {
+        "pipelines":       ["Edit", "View", "Queue"],
+        "variableGroups":  ["View"],
+        "serviceConnections": [],
+        "agentPools":      ["View"]
+      },
+      "Readers": {
+        "pipelines":       ["View"],
+        "variableGroups":  [],
+        "serviceConnections": [],
+        "agentPools":      ["View"]
+      }
+    }
+  },
+
+  "environmentApprovalMatrix": {
+    "description": "Who must approve deployments to each environment",
+    "environments": {
+      "dev": {
+        "approversRequired": 0,
+        "approverGroups": []
+      },
+      "staging": {
+        "approversRequired": 1,
+        "approverGroups": ["BuildAdministrators"],
+        "timeout": "1d",
+        "instructions": "Verify staging smoke tests pass before approving."
+      },
+      "production": {
+        "approversRequired": 2,
+        "approverGroups": ["ProjectAdministrators", "BuildAdministrators"],
+        "timeout": "7d",
+        "businessHoursGate": true,
+        "businessHours": { "timezone": "UTC", "start": "08:00", "end": "18:00", "days": ["Monday","Tuesday","Wednesday","Thursday","Friday"] },
+        "instructions": "Confirm CAB approval ticket number in the comments before approving."
+      }
+    }
+  }
+}

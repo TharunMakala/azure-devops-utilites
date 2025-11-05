@@ -55,9 +55,16 @@ Thumbs.db
 *.tfstate
 *.tfstate.*
 .terraform/
-*.tfvars
-!*.tfvars.example
+.terraform.lock.hcl
 crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Go
+tools/pipeline-monitor/pipeline-monitor
+tools/pipeline-monitor/go.sum
 
 # Build outputs
 bin/
@@ -80,3 +87,14 @@ coverage/
 # Local override files
 *.local.*
 local/
+
+# Dashboard output
+dashboard.html
+*.sarif
+
+# Helm
+helm/**/charts/
+helm/**/*.tgz
+
+# k6
+k6-results.json
